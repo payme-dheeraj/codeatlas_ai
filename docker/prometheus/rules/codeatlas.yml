@@ -1,0 +1,71 @@
+groups:
+  - name: codeatlas-critical
+    rules:
+      - alert: ServiceDown
+        expr: up{job="codeatlas-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CodeAtlas backend is DOWN"
+          description: "The backend service has been unreachable for more than 1 minute."
+
+      - alert: HighErrorRate
+        expr: |
+          rate(http_request_duration_seconds_count{status=~"5.."}[5m])
+          / rate(http_request_duration_seconds_count[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: "HTTP error rate > 5%"
+          description: "More than 5% of requests are returning 5xx errors."
+
+      - alert: LLMHighLatency
+        expr: |
+          histogram_quantile(0.95, rate(codeatlas_llm_duration_seconds_bucket[5m])) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM P95 latency > 30s"
+          description: "95th percentile LLM response time exceeds 30 seconds."
+
+      - alert: CeleryQueueBacklog
+        expr: codeatlas_celery_queue_length > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Celery queue backlog > 100 tasks"
+          description: "Tasks are accumulating in the Celery queue."
+
+      - alert: CeleryHighFailureRate
+        expr: |
+          rate(codeatlas_celery_tasks_total{status="failed"}[10m])
+          / rate(codeatlas_celery_tasks_total[10m]) > 0.1
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: "Celery task failure rate > 10%"
+          description: "More than 10% of Celery tasks are failing."
+
+      - alert: SecurityScanFailed
+        expr: rate(codeatlas_security_scans_total{status="failed"}[30m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Security scans are failing"
+          description: "One or more security scans have failed in the past 30 minutes."
+
+      - alert: HighMemoryPressure
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.90
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: "Memory usage > 90%"
+          description: "Host memory usage exceeds 90%."

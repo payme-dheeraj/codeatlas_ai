@@ -1,0 +1,84 @@
+{
+  "title": "CodeAtlas — Overview",
+  "uid": "codeatlas-overview",
+  "version": 1,
+  "schemaVersion": 38,
+  "refresh": "30s",
+  "time": {"from": "now-1h", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Backend Up",
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "targets": [{"expr": "up{job=\"codeatlas-backend\"}", "refId": "A"}],
+      "options": {"reduceOptions": {"calcs": ["last"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"mappings": [
+        {"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}
+      ]}}
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Request Rate (req/s)",
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "targets": [{"expr": "sum(rate(http_request_duration_seconds_count[5m]))", "refId": "A"}],
+      "options": {"reduceOptions": {"calcs": ["last"]}}
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Error Rate (%)",
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "targets": [{"expr": "100 * sum(rate(http_request_duration_seconds_count{status=~\"5..\"}[5m])) / sum(rate(http_request_duration_seconds_count[5m]))", "refId": "A"}],
+      "options": {"reduceOptions": {"calcs": ["last"]}}
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Celery Queue Depth",
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "targets": [{"expr": "sum(codeatlas_celery_queue_length)", "refId": "A"}],
+      "options": {"reduceOptions": {"calcs": ["last"]}}
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "HTTP Request Rate by Status",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "targets": [
+        {"expr": "sum by (status) (rate(http_request_duration_seconds_count[5m]))", "legendFormat": "{{status}}", "refId": "A"}
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "LLM Request Duration P95",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum by (le, provider, model) (rate(codeatlas_llm_duration_seconds_bucket[5m])))", "legendFormat": "{{provider}}/{{model}} P95", "refId": "A"}
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Celery Tasks — Success vs Failed",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "targets": [
+        {"expr": "sum by (status) (rate(codeatlas_celery_tasks_total[5m]))", "legendFormat": "{{status}}", "refId": "A"}
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Security Findings by Severity",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "targets": [
+        {"expr": "sum by (severity) (codeatlas_security_findings_total)", "legendFormat": "{{severity}}", "refId": "A"}
+      ]
+    }
+  ],
+  "templating": {"list": []},
+  "annotations": {"list": []},
+  "links": []
+}

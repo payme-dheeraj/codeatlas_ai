@@ -2,10 +2,26 @@
 # Full DSNs per PRD §14 — each service merges this anchor with <<: *common-env
 x-common-env: &common-env
   POSTGRES_URL: postgresql://codeatlas:${DB_PASSWORD:-password}@postgres:5432/codeatlas
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_NAME: codeatlas
+  DB_USER: codeatlas
+  DB_PASSWORD: ${DB_PASSWORD:-password}
   REDIS_URL: redis://redis:6379/0
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
   QDRANT_URL: http://qdrant:6333
+  QDRANT_HOST: qdrant
+  QDRANT_PORT: 6333
   NEO4J_URL: bolt://neo4j:7687
+  NEO4J_URI: bolt://neo4j:7687
+  NEO4J_USER: neo4j
+  NEO4J_PASSWORD: ${NEO4J_PASSWORD:-password}
   NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-password}
+  EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-local}
+  EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-all-MiniLM-L6-v2}
+  HF_HOME: /home/codeatlas/.cache/huggingface
+  SENTENCE_TRANSFORMERS_HOME: /home/codeatlas/.cache/huggingface
   MINIO_ENDPOINT: minio:9000
   MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
   MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
@@ -102,7 +118,7 @@ services:
       - "6333:6333"
       - "6334:6334"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333 && printf \"GET /healthz HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q \"200 OK\" <&3'"]
       <<: *healthcheck-defaults
 
   neo4j:
@@ -181,8 +197,21 @@ services:
     image: yuzutech/kroki:latest
     profiles: ["core"]
     restart: unless-stopped
+    environment:
+      # Mermaid (the default diagram format) is rendered by a companion service.
+      KROKI_MERMAID_HOST: kroki-mermaid
+      KROKI_MERMAID_PORT: 8002
+    depends_on:
+      - kroki-mermaid
     ports:
       - "8009:8000"
+
+  kroki-mermaid:
+    image: yuzutech/kroki-mermaid:latest
+    profiles: ["core"]
+    restart: unless-stopped
+    expose:
+      - "8002"
 
   # ────────────────────────────────────────────────────────────────────────────
   # BACKEND SERVICES
@@ -193,6 +222,8 @@ services:
       context: ../backend
       dockerfile: Dockerfile
       target: production
+      args:
+        EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-all-MiniLM-L6-v2}
     image: codeatlas/backend:latest
     profiles: ["core"]
     restart: unless-stopped
@@ -218,20 +249,37 @@ services:
       context: ../backend
       dockerfile: Dockerfile
       target: production
+      args:
+        EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-all-MiniLM-L6-v2}
     image: codeatlas/backend:latest
     profiles: ["core"]
     restart: unless-stopped
     environment:
       <<: *common-env
+      # Each forked child loads its own copy of the sentence-transformers
+      # model; without these, PyTorch spawns a thread pool per core and the
+      # resident set balloons until the kernel OOM-kills the children.
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      TOKENIZERS_PARALLELISM: "false"
     volumes:
       - repo_cache:/tmp/repos
       - ${SSH_KEY_DIR:-~/.ssh}:/home/codeatlas/.ssh:ro
+    # Embedding/parsing are memory-bound, not IO-bound: keep concurrency low.
     command: >
       celery -A app.workers.celery_app:celery_app worker
       --loglevel=info
-      --concurrency=4
+      --concurrency=${WORKER_CONCURRENCY:-2}
+      --max-memory-per-child=1500000
       --queues=indexing,cleanup,default
       --hostname=worker@%h
+    mem_limit: ${WORKER_MEM_LIMIT:-6g}
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app:celery_app inspect ping -d worker@$$(hostname) --timeout 10 | grep -q pong"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 60s
     depends_on:
       postgres:
         condition: service_healthy

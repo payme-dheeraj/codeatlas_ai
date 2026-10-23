@@ -23,6 +23,7 @@ class Repository(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         name: Human-readable display name (slug-safe).
         url: Remote clone URL (HTTPS or SSH).  Null for local imports.
         local_path: Absolute path inside the container (MinIO key prefix).
+        source_archive_key: MinIO key of the uploaded ZIP, for ZIP imports.
         provider: Hosting provider identifier.
         default_branch: The branch that was cloned and indexed.
         description: Short description inferred from README or provided by user.
@@ -63,6 +64,9 @@ class Repository(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     clone_path: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # MinIO key prefix for raw files
+    source_archive_key: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )  # MinIO object key of the uploaded ZIP (ZIP-imported repos only)
 
     # ── Status ────────────────────────────────────────────────────────────────
     index_status: Mapped[str] = mapped_column(

@@ -49,10 +49,20 @@ RUN pip install --upgrade pip \
 
 COPY . .
 
+ARG EMBEDDING_MODEL_NAME=all-MiniLM-L6-v2
+ENV HF_HOME=/home/codeatlas/.cache/huggingface \
+    SENTENCE_TRANSFORMERS_HOME=/home/codeatlas/.cache/huggingface \
+    HF_HUB_DISABLE_TELEMETRY=1
+
+# Pre-download the embedding model so the first search never downloads at runtime
+RUN mkdir -p /home/codeatlas/.cache/huggingface \
+ && python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL_NAME}')" \
+ || echo "WARN: embedding model pre-download failed; will download at runtime"
+
 # Create non-root user with a real home dir for SSH key resolution
 RUN addgroup --system codeatlas \
     && adduser --system --ingroup codeatlas --home /home/codeatlas --shell /bin/sh codeatlas \
-    && chown -R codeatlas:codeatlas /app /home/codeatlas/.ssh
+    && chown -R codeatlas:codeatlas /app /home/codeatlas
 
 ENV HOME=/home/codeatlas
 USER codeatlas

@@ -277,7 +277,7 @@ def parse_repository(
             """
         )
 
-        with PGSession() as pg_session:
+        with _SyncSession() as pg_session:
             # Delete stale symbols before re-inserting
             from sqlalchemy import delete as sa_delete
             from app.models.symbol import ParsedSymbol
@@ -302,8 +302,6 @@ def parse_repository(
                 ]
                 pg_session.execute(insert_stmt, rows)
             pg_session.commit()
-
-        pg_engine.dispose()
 
         with get_sync_session() as session:
             _update_job(session, job_id, progress=75, current_stage="graph_write")

@@ -174,15 +174,22 @@ class RepoService:
             )
 
         # ── 3. Persist repository record ─────────────────────────────────────
-        repo = await self._repo_repo.create(
-            name=name,
-            url=payload.url,
-            provider=provider,
-            default_branch=payload.default_branch,
-            is_private=payload.is_private,
-            index_status="pending",
-            owner_id=owner_id,
-        )
+        create_kwargs: dict = {
+            "name": name,
+            "url": payload.url,
+            "provider": provider,
+            "is_private": payload.is_private,
+            "index_status": "pending",
+            "owner_id": owner_id,
+            # Persisted so re-indexing a ZIP import can re-extract the archive.
+            "source_archive_key": getattr(payload, "zip_minio_key", None),
+        }
+        # Omit when auto-detecting so the column default applies; the worker
+        # writes back the branch it actually resolved against the remote.
+        if payload.default_branch:
+            create_kwargs["default_branch"] = payload.default_branch
+
+        repo = await self._repo_repo.create(**create_kwargs)
         logger.info("repository_created", repo_id=str(repo.id), name=name, url=payload.url)
 
         # ── 4. Create index job record ───────────────────────────────────────
@@ -348,34 +355,72 @@ class RepoService:
                 "Pass force_full=true to override."
             )
 
+        archive_key = getattr(repo, "source_archive_key", None)
+        requested = (payload.job_type or "full_index").lower()
+
+        # parse_only / embed_only replay later pipeline stages from data that
+        # is already stored, so they do not need the original source at all.
+        # Only a full re-index has to re-fetch the repository.
+        stage = {
+            "parse_only": "parse",
+            "parse": "parse",
+            "embed_only": "embed",
+            "embed": "embed",
+        }.get(requested, "full_index")
+
+        if stage == "full_index" and not repo.url and not archive_key:
+            raise ValueError(
+                "This repository has no clone URL and no stored source archive, "
+                "so it cannot be re-indexed. Re-upload the ZIP to refresh it."
+            )
+
         job = await self._job_repo.create(
             repo_id=repo.id,
-            job_type=payload.job_type,
+            job_type=stage,
             status="queued",
         )
 
         try:
-            from app.workers.tasks.repo_tasks import clone_and_index_repo
+            common = {
+                "repo_id": str(repo.id),
+                "job_id": str(job.id),
+                "repo_name": repo.name,
+            }
+            if stage == "embed":
+                from app.workers.tasks.embedding_tasks import embed_repository
 
-            task = clone_and_index_repo.apply_async(
-                kwargs={
-                    "repo_id": str(repo.id),
-                    "job_id": str(job.id),
-                    "url": repo.url,
-                    "local_path": None,
-                    "branch": repo.default_branch,
-                    "auth_token": None,
-                    "is_private": repo.is_private,
-                },
-                task_id=str(job.id),
-            )
+                task = embed_repository.apply_async(kwargs=common, task_id=str(job.id))
+            elif stage == "parse":
+                from app.workers.tasks.parser_tasks import parse_repository
+
+                task = parse_repository.apply_async(
+                    kwargs={**common, "repo_url": repo.url},
+                    task_id=str(job.id),
+                )
+            else:
+                from app.workers.tasks.repo_tasks import clone_and_index_repo
+
+                task = clone_and_index_repo.apply_async(
+                    kwargs={
+                        "repo_id": str(repo.id),
+                        "job_id": str(job.id),
+                        "url": repo.url,
+                        "local_path": None,
+                        "zip_minio_key": archive_key,
+                        "branch": repo.default_branch,
+                        "auth_token": None,
+                        "is_private": repo.is_private,
+                    },
+                    task_id=str(job.id),
+                )
+
             await self._job_repo.update(job, celery_task_id=task.id)
             await self._repo_repo.update_status(repo.id, "pending")
             logger.info(
                 "reindex_dispatched",
                 repo_id=str(repo_id),
                 job_id=str(job.id),
-                job_type=payload.job_type,
+                job_type=stage,
             )
         except Exception as exc:
             await self._job_repo.update(job, status="failed", error_message=str(exc))

@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SectionLoader, Spinner } from "@/components/ui/spinner";
 import type { ChatMessage } from "@/lib/api";
 
 export default function ChatPage({ params }: { params: { id: string } }) {
@@ -26,7 +27,7 @@ export default function ChatPage({ params }: { params: { id: string } }) {
   } = useChatStore();
 
   // Load sessions
-  const { data: sessionList = [] } = useQuery({
+  const { data: sessionList = [], isLoading: sessionsLoading } = useQuery({
     queryKey: ["chat-sessions", repoId],
     queryFn: () => chatApi.listSessions(repoId),
   });
@@ -40,7 +41,7 @@ export default function ChatPage({ params }: { params: { id: string } }) {
   }, [sessionList]);
 
   // Load messages when session changes
-  const { data: msgList = [] } = useQuery({
+  const { data: msgList = [], isLoading: messagesLoading } = useQuery({
     queryKey: ["chat-messages", activeSessionId],
     queryFn: () => chatApi.getMessages(activeSessionId!),
     enabled: !!activeSessionId,
@@ -130,6 +131,13 @@ export default function ChatPage({ params }: { params: { id: string } }) {
             </Button>
           </div>
           <div className="flex-1 overflow-y-auto scrollbar-thin">
+            {sessionsLoading &&
+              [...Array(4)].map((_, i) => (
+                <div key={i} className="px-3 py-3 border-b border-border/50 space-y-2">
+                  <Skeleton className="h-4 w-32" />
+                  <Skeleton className="h-3 w-20" />
+                </div>
+              ))}
             {(sessionList.length > 0 ? sessionList : sessions).map((s) => (
               <button
                 key={s.id}
@@ -150,7 +158,10 @@ export default function ChatPage({ params }: { params: { id: string } }) {
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Messages */}
           <div className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-4">
-            {displayMessages.length === 0 && !isStreaming && (
+            {messagesLoading && displayMessages.length === 0 && (
+              <SectionLoader label="Loading conversation…" className="h-full" />
+            )}
+            {!messagesLoading && displayMessages.length === 0 && !isStreaming && (
               <div className="flex flex-col items-center justify-center h-full text-center gap-4 py-16">
                 <div className="rounded-full bg-primary/10 p-4">
                   <MessageSquare className="h-10 w-10 text-primary/60" />
@@ -203,6 +214,19 @@ export default function ChatPage({ params }: { params: { id: string } }) {
                 </div>
               </div>
             ))}
+
+            {/* Waiting for the first token from the RAG pipeline */}
+            {isStreaming && !streamingContent && (
+              <div className="flex gap-3">
+                <div className="flex-shrink-0 h-8 w-8 rounded-full bg-secondary/20 flex items-center justify-center">
+                  <Bot className="h-4 w-4 text-secondary" />
+                </div>
+                <div className="rounded-lg px-4 py-3 text-sm bg-card border border-border flex items-center gap-2 text-muted-foreground">
+                  <Spinner />
+                  <span>Searching the codebase…</span>
+                </div>
+              </div>
+            )}
 
             {/* Streaming response */}
             {isStreaming && streamingContent && (

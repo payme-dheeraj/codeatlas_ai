@@ -13,6 +13,7 @@ import zipfile
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.api.deps import (
@@ -32,6 +33,67 @@ from app.services.repo_service import RepoService
 
 router = APIRouter(prefix="/repos", tags=["repositories"])
 logger = get_logger(__name__)
+
+# Upper bound on inline file preview payloads (1 MB).
+_MAX_PREVIEW_BYTES = 1024 * 1024
+
+
+@router.get(
+    "/remote-branches",
+    summary="List branches on a remote repository",
+    description=(
+        "Inspects a remote Git repository with `git ls-remote` (no clone) and "
+        "returns its branches plus the detected default branch, so a branch can "
+        "be chosen before importing."
+    ),
+    responses={
+        200: {"description": "Branches retrieved"},
+        400: {"description": "Remote could not be reached or has no branches"},
+    },
+)
+async def list_remote_branches_endpoint(
+    url: str = Query(..., description="HTTPS or SSH clone URL"),
+    auth_token: str | None = Query(
+        default=None,
+        description="PAT for private repositories (never stored)",
+    ),
+) -> dict:
+    """Return the branch list and detected default branch for a remote repo.
+
+    Args:
+        url: Repository clone URL.
+        auth_token: Optional PAT for private repositories.
+
+    Returns:
+        Dict with ``branches`` and ``default_branch``.
+
+    Raises:
+        HTTPException 400: If the remote cannot be inspected.
+    """
+    from app.core.git_remote import (
+        GitRemoteError,
+        get_default_branch,
+        list_remote_branches,
+    )
+
+    try:
+        branches = await run_in_threadpool(list_remote_branches, url, auth_token)
+        if not branches:
+            raise GitRemoteError("The remote repository has no branches.")
+        default = await run_in_threadpool(get_default_branch, url, auth_token)
+    except GitRemoteError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    if default not in branches:
+        default = next(
+            (b for b in ("main", "master") if b in branches),
+            branches[0],
+        )
+
+    return {"branches": branches, "default_branch": default}
 
 
 @router.post(
@@ -534,12 +596,18 @@ async def get_repo_file(
     repo_id: uuid.UUID,
     path: str = Query(..., description="Relative file path inside the repo"),
 ) -> dict:
-    """Return the text content of a single file stored in MinIO."""
-    import io as _io
-    try:
-        from minio import Minio as _Minio
-        from app.core.config import settings as _settings
+    """Return the text content of a single file stored in MinIO.
 
+    Binary files are reported via ``is_binary`` rather than having placeholder
+    text pushed into ``content``, so the client can render an appropriate
+    preview instead of dumping bytes into a code editor. Large text files are
+    truncated to keep the payload (and the browser) responsive.
+    """
+    from minio import Minio as _Minio
+    from app.core.config import settings as _settings
+
+    response = None
+    try:
         client = _Minio(
             endpoint=_settings.minio_endpoint,
             access_key=_settings.minio_access_key,
@@ -550,13 +618,47 @@ async def get_repo_file(
         obj_key = f"repos/{repo_id}/raw/{path.lstrip('/')}"
         response = client.get_object(bucket, obj_key)
         raw = response.read()
-        try:
-            content = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            content = f"(binary file, {len(raw)} bytes)"
-        return {"path": path, "content": content, "size": len(raw)}
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File not found: {path} ({exc})",
         ) from exc
+    finally:
+        if response is not None:
+            response.close()
+            response.release_conn()
+
+    size = len(raw)
+
+    # A NUL byte in the first chunk is the conventional binary heuristic.
+    if b"\x00" in raw[:8192]:
+        return {
+            "path": path,
+            "content": None,
+            "size": size,
+            "is_binary": True,
+            "truncated": False,
+        }
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return {
+            "path": path,
+            "content": None,
+            "size": size,
+            "is_binary": True,
+            "truncated": False,
+        }
+
+    truncated = size > _MAX_PREVIEW_BYTES
+    if truncated:
+        text = raw[:_MAX_PREVIEW_BYTES].decode("utf-8", errors="ignore")
+
+    return {
+        "path": path,
+        "content": text,
+        "size": size,
+        "is_binary": False,
+        "truncated": truncated,
+    }

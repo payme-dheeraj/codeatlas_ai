@@ -9,6 +9,7 @@ import { cn, severityColor, timeAgo } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { SectionLoader, Spinner } from "@/components/ui/spinner";
 import type { SecurityFinding } from "@/lib/api";
 
 const SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"];
@@ -44,7 +45,7 @@ function FindingCard({ finding }: { finding: SecurityFinding }) {
           <p className="font-medium">{finding.title}</p>
           {finding.file_path && (
             <p className="text-xs text-muted-foreground font-mono mt-0.5">
-              {finding.file_path}{finding.line_start && `:${finding.line_start}`}
+              {finding.file_path}{finding.start_line ? `:${finding.start_line}` : ""}
             </p>
           )}
         </div>
@@ -52,16 +53,45 @@ function FindingCard({ finding }: { finding: SecurityFinding }) {
       </button>
       {open && (
         <div className="border-t border-border p-4 space-y-3">
-          {finding.snippet && (
-            <pre className="text-xs rounded-md bg-muted p-3 overflow-x-auto font-mono leading-relaxed">{finding.snippet}</pre>
+          {finding.description && (
+            <p className="text-sm text-muted-foreground">{finding.description}</p>
           )}
-          {finding.remediation && (
-            <div className="rounded-md bg-accent/10 border border-accent/20 p-3">
-              <p className="text-sm font-medium text-accent mb-1">✅ Remediation</p>
-              <p className="text-sm text-muted-foreground">{finding.remediation}</p>
+          {finding.snippet && (
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-muted-foreground">Vulnerable code</p>
+              <pre className="text-xs rounded-md bg-muted p-3 overflow-x-auto font-mono leading-relaxed">{finding.snippet}</pre>
             </div>
           )}
-          <p className="text-xs text-muted-foreground">Category: <span className="font-mono">{finding.category}</span></p>
+          {/* `remediation` is a JSON object from the AI generator, never a string. */}
+          {finding.remediation && (
+            <div className="rounded-md bg-accent/10 border border-accent/20 p-3 space-y-2">
+              <p className="text-sm font-medium text-accent">✅ Remediation</p>
+              {finding.remediation.vulnerability && (
+                <p className="text-sm text-muted-foreground">{finding.remediation.vulnerability}</p>
+              )}
+              {finding.remediation.fixed_code && (
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-muted-foreground">Suggested fix</p>
+                  <pre className="text-xs rounded-md bg-background/60 p-3 overflow-x-auto font-mono leading-relaxed">
+                    {finding.remediation.fixed_code}
+                  </pre>
+                </div>
+              )}
+              {!!finding.remediation.recommendations?.length && (
+                <ul className="list-disc pl-5 space-y-0.5">
+                  {finding.remediation.recommendations.map((rec, i) => (
+                    <li key={i} className="text-sm text-muted-foreground">{rec}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+            <span>Category: <span className="font-mono">{finding.category}</span></span>
+            <span>Rule: <span className="font-mono">{finding.rule_id}</span></span>
+            <span>Scanner: <span className="font-mono">{finding.scanner}</span></span>
+            {finding.cvss_score > 0 && <span>CVSS: {finding.cvss_score}</span>}
+          </div>
         </div>
       )}
     </Card>
@@ -73,7 +103,7 @@ export default function SecurityPage({ params }: { params: { id: string } }) {
   const [severityFilter, setSeverityFilter] = useState<string>("all");
   const queryClient = useQueryClient();
 
-  const { data: scans = [] } = useQuery({
+  const { data: scans = [], isLoading: scansLoading } = useQuery({
     queryKey: ["scans", repoId],
     queryFn: () => securityApi.listScans(repoId),
     refetchInterval: (q) =>
@@ -82,7 +112,7 @@ export default function SecurityPage({ params }: { params: { id: string } }) {
 
   const latestScan = scans[0];
 
-  const { data: findings = [] } = useQuery({
+  const { data: findings = [], isLoading: findingsLoading } = useQuery({
     queryKey: ["findings", latestScan?.id],
     queryFn: () => securityApi.getFindings(repoId, latestScan!.id),
     enabled: !!latestScan?.id && latestScan.status === "complete",
@@ -93,16 +123,18 @@ export default function SecurityPage({ params }: { params: { id: string } }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["scans", repoId] }),
   });
 
-  const handleExport = async () => {
-    if (!latestScan) return;
-    const blob = await securityApi.exportSarif(repoId, latestScan.id);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `scan-${latestScan.id}.sarif`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const { mutate: exportSarif, isPending: exporting } = useMutation({
+    mutationFn: async () => {
+      if (!latestScan) return;
+      const blob = await securityApi.exportSarif(repoId, latestScan.id);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `scan-${latestScan.id}.sarif`;
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+  });
 
   const filtered = severityFilter === "all"
     ? findings
@@ -132,8 +164,18 @@ export default function SecurityPage({ params }: { params: { id: string } }) {
           </div>
           <div className="flex gap-2">
             {latestScan?.status === "complete" && (
-              <Button variant="outline" size="sm" onClick={handleExport}>
-                <Download className="h-4 w-4 mr-2" /> Export SARIF
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => exportSarif()}
+                disabled={exporting}
+              >
+                {exporting ? (
+                  <Spinner className="mr-2" />
+                ) : (
+                  <Download className="h-4 w-4 mr-2" />
+                )}
+                {exporting ? "Exporting…" : "Export SARIF"}
               </Button>
             )}
             <Button
@@ -170,7 +212,11 @@ export default function SecurityPage({ params }: { params: { id: string } }) {
         )}
 
         {/* Findings list */}
-        {latestScan?.status === "running" ? (
+        {scansLoading ? (
+          <SectionLoader label="Loading security scans…" />
+        ) : findingsLoading ? (
+          <SectionLoader label="Loading findings…" />
+        ) : latestScan?.status === "running" ? (
           <div className="text-center py-16 text-muted-foreground">
             <RefreshCw className="h-8 w-8 animate-spin mx-auto mb-3 text-secondary" />
             <p>Security scan in progress…</p>

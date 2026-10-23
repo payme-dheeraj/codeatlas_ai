@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     environment: Literal["development", "staging", "production"] = "development"
     debug: bool = False
     secret_key: str = Field(default="dev-secret-change-in-production", min_length=32)
+    # When True (default) every data endpoint requires a valid JWT or API key.
+    # Set AUTH_REQUIRED=false only for local demos / single-user sandboxes.
+    auth_required: bool = True
     allowed_origins: str = Field(
         default="http://localhost:3000,http://127.0.0.1:3000,http://frontend:3000,http://backend:8000"
     )

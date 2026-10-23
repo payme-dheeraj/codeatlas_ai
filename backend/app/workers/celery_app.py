@@ -38,11 +38,16 @@ celery_app.conf.update(
     accept_content=["json"],
     # Reliability
     task_acks_late=True,
-    task_reject_on_worker_lost=True,
+    # Must stay False: with acks_late, a task whose child process is killed
+    # (e.g. OOM while loading the embedding model) would otherwise be requeued
+    # forever, looping indefinitely instead of surfacing the failure.
+    task_reject_on_worker_lost=False,
     task_track_started=True,
     result_expires=settings.celery_result_expires,
     # Concurrency / execution
     worker_prefetch_multiplier=1,  # One task at a time per worker for long-running jobs
+    # Recycle children periodically so the loaded ML model's memory is released.
+    worker_max_tasks_per_child=8,
     task_soft_time_limit=600,      # 10 min soft limit → SoftTimeLimitExceeded
     task_time_limit=900,           # 15 min hard kill
     # Timezone

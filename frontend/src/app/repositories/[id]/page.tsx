@@ -56,7 +56,7 @@ export default function RepositoryPage({
       q.state.data && ACTIVE_STATUSES.includes(q.state.data.index_status) ? 3000 : false,
   });
 
-  const { data: health } = useQuery({
+  const { data: health, isLoading: healthLoading } = useQuery({
     queryKey: ["health", id],
     queryFn: () => reposApi.health(id),
     enabled: repo?.index_status === "complete" || repo?.index_status === "cloned",
@@ -120,6 +120,8 @@ export default function RepositoryPage({
   const st = repo.stats;
   const isActive = ACTIVE_STATUSES.includes(repo.index_status);
   const isDone = repo.index_status === "complete" || repo.index_status === "cloned";
+  // A failed *re-index* must not hide data from an earlier successful run.
+  const hasPriorIndex = !!repo.last_indexed_at;
   const statusBadgeVariant = isDone ? "success" : repo.index_status === "failed" ? "destructive" : "secondary";
   const healthScore = health?.composite_score ?? 0;
   const healthColor = healthScore >= 80 ? "text-accent" : healthScore >= 60 ? "text-secondary" : "text-destructive";
@@ -236,6 +238,22 @@ export default function RepositoryPage({
         )}
 
         {/* Health score */}
+        {healthLoading && (
+          <Card>
+            <CardContent className="p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-muted-foreground">Health Score</span>
+                <Skeleton className="h-8 w-20" />
+              </div>
+              <Skeleton className="h-2.5 w-full" />
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                {[...Array(4)].map((_, i) => (
+                  <Skeleton key={i} className="h-12" />
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
         {health && (
           <Card>
             <CardContent className="p-5 space-y-3">
@@ -290,9 +308,30 @@ export default function RepositoryPage({
             ) : repo.index_status === "failed" ? (
               <div className="space-y-3">
                 <AlertTriangle className="h-8 w-8 text-destructive mx-auto" />
-                <p className="text-destructive font-medium">Indexing failed</p>
+                <p className="text-destructive font-medium">
+                  {hasPriorIndex ? "Latest indexing run failed" : "Indexing failed"}
+                </p>
                 {repo.error_message && <p className="text-xs text-muted-foreground font-mono">{repo.error_message}</p>}
-                <Button variant="outline" size="sm" onClick={() => reindex()}>Retry indexing</Button>
+                {hasPriorIndex && (
+                  <p className="text-sm text-muted-foreground">
+                    Data from the previous successful index is still available.
+                  </p>
+                )}
+                <Button variant="outline" size="sm" onClick={() => reindex()} disabled={reindexing}>
+                  {reindexing && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                  Retry indexing
+                </Button>
+                {hasPriorIndex && (
+                  <div className="flex flex-wrap gap-3 justify-center pt-2">
+                    {TABS.map(tab => (
+                      <Button key={tab.id} variant="outline" size="sm" asChild>
+                        <Link href={`/repositories/${id}/${tab.href}`}>
+                          <tab.icon className="h-4 w-4 mr-2" /> {tab.label}
+                        </Link>
+                      </Button>
+                    ))}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="space-y-3">

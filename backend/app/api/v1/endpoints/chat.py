@@ -40,9 +40,12 @@ def _now() -> str:
 
 async def _get_redis_client():
     try:
-        from app.core.redis import get_redis
-        return await get_redis()
-    except Exception:
+        import redis.asyncio as aioredis
+        from app.core.redis import get_redis_pool
+
+        return aioredis.Redis(connection_pool=get_redis_pool())
+    except Exception as exc:
+        logger.warning("chat_redis_unavailable", error=str(exc))
         return None
 
 

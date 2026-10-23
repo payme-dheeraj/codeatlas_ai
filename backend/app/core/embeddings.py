@@ -252,8 +252,10 @@ def chunk_text(
         List of text chunk strings.
     """
     # Convert token targets to character counts
-    char_size = chunk_size * 4
-    char_overlap = overlap * 4
+    char_size = max(1, chunk_size * 4)
+    # Overlap must stay strictly smaller than the window, otherwise the
+    # start cursor cannot advance.
+    char_overlap = max(0, min(overlap * 4, char_size - 1))
 
     if len(text) <= char_size:
         return [text]
@@ -268,7 +270,16 @@ def chunk_text(
             if newline_pos > start + char_size // 2:
                 end = newline_pos + 1
         chunks.append(text[start:end])
-        start = end - char_overlap
+
+        # Stop once the tail has been emitted. Without this the next start
+        # (end - char_overlap) would rewind behind `end`, re-emit the same
+        # tail chunk forever and grow `chunks` without bound.
+        if end >= len(text):
+            break
+
+        # Guarantee forward progress even if the newline break produced a
+        # window smaller than the overlap.
+        start = max(start + 1, end - char_overlap)
 
     return chunks
 

@@ -80,6 +80,21 @@ class EmbeddingService:
         fields used in search queries.
         """
         existing = {c.name for c in self._client.get_collections().collections}
+        if COLLECTION_NAME in existing:
+            try:
+                info = self._client.get_collection(COLLECTION_NAME)
+                current_dim = info.config.params.vectors.size
+            except Exception:
+                current_dim = None
+            if current_dim is not None and current_dim != self._dim:
+                logger.warning(
+                    "qdrant_collection_dim_mismatch_recreating",
+                    collection=COLLECTION_NAME,
+                    existing_dim=current_dim,
+                    expected_dim=self._dim,
+                )
+                self._client.delete_collection(COLLECTION_NAME)
+                existing.discard(COLLECTION_NAME)
         if COLLECTION_NAME not in existing:
             self._client.create_collection(
                 collection_name=COLLECTION_NAME,
@@ -93,16 +108,40 @@ class EmbeddingService:
                     ef_construct=100,
                 ),
             )
-            # Create payload indexes for fast metadata filtering
-            for field in (_F_REPO_ID, _F_LANGUAGE, _F_SYMBOL_KIND, _F_FILE_PATH):
-                self._client.create_payload_index(
-                    collection_name=COLLECTION_NAME,
-                    field_name=field,
-                    field_schema=qmodels.PayloadSchemaType.KEYWORD,
-                )
             logger.info("qdrant_collection_created", collection=COLLECTION_NAME, dim=self._dim)
         else:
             logger.debug("qdrant_collection_exists", collection=COLLECTION_NAME)
+
+        self._ensure_payload_indexes()
+
+    def _ensure_payload_indexes(self) -> None:
+        """Ensure payload indexes required by filtering and keyword search exist.
+
+        Runs on every start (not just on collection creation) so that
+        collections created by earlier versions gain the full-text indexes that
+        ``search_by_text`` depends on — without them ``MatchText`` matches
+        nothing and keyword search silently returns zero results.
+        """
+        keyword_fields = (_F_REPO_ID, _F_LANGUAGE, _F_SYMBOL_KIND, _F_FILE_PATH)
+        text_fields = (_F_NAME, _F_QUALIFIED_NAME, _F_CHUNK_TEXT)
+
+        for field, schema in [
+            *((f, qmodels.PayloadSchemaType.KEYWORD) for f in keyword_fields),
+            *((f, qmodels.PayloadSchemaType.TEXT) for f in text_fields),
+        ]:
+            try:
+                self._client.create_payload_index(
+                    collection_name=COLLECTION_NAME,
+                    field_name=field,
+                    field_schema=schema,
+                )
+            except Exception as exc:  # noqa: BLE001 - index already exists is fine
+                logger.debug(
+                    "qdrant_payload_index_skipped",
+                    field=field,
+                    schema=str(schema),
+                    error=str(exc),
+                )
 
     def delete_repo_vectors(self, repo_id: str) -> int:
         """Delete all Qdrant points for a repository.
@@ -126,8 +165,10 @@ class EmbeddingService:
                 )
             ),
         )
-        logger.info("qdrant_repo_deleted", repo_id=repo_id)
-        return result.result.deleted if result.result else 0
+        logger.info("qdrant_repo_deleted", repo_id=repo_id, status=str(result.status))
+        # qdrant-client returns an UpdateResult (operation_id/status) and does
+        # not report a deleted-count for filter-based deletes.
+        return 0
 
     # ── Indexing ──────────────────────────────────────────────────────────────
 
@@ -344,15 +385,19 @@ class EmbeddingService:
                 )
             )
 
-        # Qdrant text match on name field
-        must_conditions.append(
-            qmodels.FieldCondition(
-                key=_F_NAME,
-                match=qmodels.MatchText(text=query),
-            )
-        )
+        # Full-text match against the symbol name, its qualified name, or the
+        # indexed chunk text. `should` gives OR semantics so a multi-word query
+        # does not require every token to appear in the symbol name alone.
+        text_conditions = [
+            qmodels.FieldCondition(key=field, match=qmodels.MatchText(text=query))
+            for field in (_F_NAME, _F_QUALIFIED_NAME, _F_CHUNK_TEXT)
+        ]
 
-        scroll_filter = qmodels.Filter(must=must_conditions) if must_conditions else None
+        # Qdrant semantics: must AND (should_1 OR should_2 OR ...)
+        scroll_filter = qmodels.Filter(
+            must=must_conditions or None,
+            should=text_conditions,
+        )
         records, _ = self._client.scroll(
             collection_name=COLLECTION_NAME,
             scroll_filter=scroll_filter,

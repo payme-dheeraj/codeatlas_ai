@@ -10,6 +10,7 @@ import { cn, timeAgo } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 
 const DOC_TYPES = [
   { id: "readme", label: "README" },
@@ -35,7 +36,7 @@ export default function DocsPage({ params }: { params: { id: string } }) {
 
   const docExists = (docs as DocumentResponse[]).some((d) => d.doc_type === activeType);
 
-  const { data: fullDoc } = useQuery({
+  const { data: fullDoc, isLoading: docLoading } = useQuery({
     queryKey: ["doc-detail", repoId, activeType],
     queryFn: () => docsApi.get(repoId, activeType),
     enabled: docExists,
@@ -125,7 +126,7 @@ export default function DocsPage({ params }: { params: { id: string } }) {
 
           {/* Content area */}
           <Card className="flex-1 min-h-[500px]">
-            {isLoading || generating ? (
+            {isLoading || generating || polling || docLoading ? (
               <div className="p-6 space-y-3">
                 <Skeleton className="h-6 w-1/3" />
                 <Skeleton className="h-4 w-full" />
@@ -133,7 +134,12 @@ export default function DocsPage({ params }: { params: { id: string } }) {
                 <Skeleton className="h-4 w-4/5" />
                 <Skeleton className="h-4 w-full" />
                 <Skeleton className="h-4 w-3/4" />
-                <p className="text-xs text-muted-foreground pt-2">{generating ? "Generating documentation…" : "Loading…"}</p>
+                <p className="flex items-center gap-2 text-xs text-muted-foreground pt-2">
+                  <Spinner className="h-3 w-3" />
+                  {generating || polling
+                    ? "Generating documentation — this can take a minute…"
+                    : "Loading…"}
+                </p>
               </div>
             ) : current ? (
               <div className="p-6 overflow-auto">

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
 import { Loader2, AlertCircle } from "lucide-react";
 import Link from "next/link";
@@ -14,7 +14,16 @@ import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { setToken } = useAuthStore();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -26,7 +35,8 @@ export default function LoginPage() {
       setToken(data.access_token);
       const user = await authApi.me();
       useAuthStore.getState().setUser(user);
-      router.push("/");
+      const next = searchParams.get("next");
+      router.push(next && next.startsWith("/") ? next : "/");
     },
     onError: (err: Error) => setError(err.message),
   });

@@ -4,7 +4,7 @@ import uuid
 from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
-from fastapi import Depends, HTTPException, Security, status
+from fastapi import Depends, HTTPException, Query, Security, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from redis.asyncio import Redis
@@ -51,33 +51,49 @@ async def get_cache(
 
 async def get_optional_current_user_id(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    api_key: str | None = Security(_api_key_header),
+    session: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> uuid.UUID | None:
-    """Decode the JWT and return the subject UUID, or None if unauthenticated.
+    """Resolve the current user UUID, or None if unauthenticated.
 
-    This dependency is *optional* — endpoints that use it will work for both
-    authenticated and anonymous callers.  Use ``get_current_user_id`` for
-    endpoints that require authentication.
+    This dependency is *optional* only when ``settings.auth_required`` is
+    False — in that mode endpoints work for both authenticated and anonymous
+    callers.  With the default (``auth_required=True``) it behaves exactly
+    like ``get_current_user_id`` and rejects anonymous requests with 401.
 
     Args:
         credentials: HTTP Bearer token from the Authorization header.
+        api_key: Optional raw API key from X-API-Key header.
+        session: Injected DB session (used for API key lookup).
+        redis: Injected Redis client.
 
     Returns:
-        Decoded user UUID, or None if no valid token is present.
+        Decoded user UUID, or None if no valid token is present and
+        anonymous access is allowed.
     """
-    if credentials is None:
-        return None
-    try:
-        payload = jwt.decode(
-            credentials.credentials,
-            settings.secret_key,
-            algorithms=[settings.jwt_algorithm],
-        )
-        sub: str | None = payload.get("sub")
-        if sub is None:
+    if settings.auth_required:
+        return await get_current_user_id(credentials, api_key, session, redis)
+
+    if credentials is not None:
+        try:
+            payload = jwt.decode(
+                credentials.credentials,
+                settings.secret_key,
+                algorithms=[settings.jwt_algorithm],
+            )
+            sub: str | None = payload.get("sub")
+            return uuid.UUID(sub) if sub else None
+        except (JWTError, ValueError):
             return None
-        return uuid.UUID(sub)
-    except (JWTError, ValueError):
-        return None
+
+    if api_key is not None:
+        from app.services.auth_service import AuthService
+
+        user = await AuthService(session, redis).authenticate_api_key(api_key)
+        return user.id if user is not None else None
+
+    return None
 
 
 async def get_current_user_id(
@@ -140,6 +156,33 @@ async def get_current_user_id(
         detail="Authentication required.",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+async def require_authenticated(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    api_key: str | None = Security(_api_key_header),
+    token: str | None = Query(default=None, include_in_schema=False),
+    session: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+) -> uuid.UUID | None:
+    """Router-level authentication gate for all non-public API routes.
+
+    Accepts a Bearer JWT, an ``X-API-Key`` header, or — for Server-Sent
+    Events clients that cannot set headers — a ``token`` query parameter.
+    When ``settings.auth_required`` is False the gate is a no-op.
+
+    Returns:
+        Authenticated user UUID, or None when anonymous access is allowed.
+
+    Raises:
+        HTTPException 401: If authentication is required and no valid
+        credential is present.
+    """
+    if not settings.auth_required:
+        return None
+    if credentials is None and token:
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+    return await get_current_user_id(credentials, api_key, session, redis)
 
 
 async def get_diagram_service(

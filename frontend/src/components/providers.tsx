@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider, useTheme } from "next-themes";
 import { useState, useEffect } from "react";
 import { useAppStore } from "@/lib/store";
+import { AuthGuard } from "@/components/auth-guard";
+import { GlobalLoadingBar } from "@/components/global-loading-bar";
 
 function ThemeSync() {
   const { resolvedTheme } = useTheme();
@@ -35,7 +37,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
         disableTransitionOnChange
       >
         <ThemeSync />
-        {children}
+        <GlobalLoadingBar />
+        <AuthGuard>{children}</AuthGuard>
       </ThemeProvider>
     </QueryClientProvider>
   );

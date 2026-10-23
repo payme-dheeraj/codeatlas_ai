@@ -47,11 +47,15 @@ class RepositoryCreate(BaseModel):
         description="Hosting provider hint: github | gitlab | bitbucket | local",
         examples=["github"],
     )
-    default_branch: str = Field(
-        default="main",
+    default_branch: str | None = Field(
+        default=None,
         min_length=1,
         max_length=100,
-        description="Branch to clone and index",
+        description=(
+            "Branch to clone and index. Omit to auto-detect the remote's "
+            "default branch (handles main vs master automatically)."
+        ),
+        examples=["main"],
     )
     auth_token: str | None = Field(
         default=None,

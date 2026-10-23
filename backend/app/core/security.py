@@ -14,8 +14,8 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -24,11 +24,17 @@ logger = get_logger(__name__)
 
 # ── Password hashing ───────────────────────────────────────────────────────────
 
-_pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto",
-    bcrypt__rounds=12,
-)
+_BCRYPT_ROUNDS = 12
+# bcrypt only consumes the first 72 bytes of input; newer versions raise instead
+# of silently truncating, so we pre-hash longer inputs with SHA-256.
+_BCRYPT_MAX_BYTES = 72
+
+
+def _normalize_password(plain: str) -> bytes:
+    raw = plain.encode("utf-8")
+    if len(raw) > _BCRYPT_MAX_BYTES:
+        raw = hashlib.sha256(raw).hexdigest().encode("ascii")
+    return raw
 
 
 def hash_password(plain: str) -> str:
@@ -40,7 +46,9 @@ def hash_password(plain: str) -> str:
     Returns:
         A bcrypt hash string suitable for database storage.
     """
-    return _pwd_context.hash(plain)
+    return bcrypt.hashpw(
+        _normalize_password(plain), bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)
+    ).decode("ascii")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
@@ -53,7 +61,12 @@ def verify_password(plain: str, hashed: str) -> bool:
     Returns:
         True if the password matches, False otherwise.
     """
-    return _pwd_context.verify(plain, hashed)
+    if not hashed:
+        return False
+    try:
+        return bcrypt.checkpw(_normalize_password(plain), hashed.encode("ascii"))
+    except ValueError:
+        return False
 
 
 # ── Token types ────────────────────────────────────────────────────────────────

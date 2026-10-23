@@ -26,6 +26,7 @@ from sqlalchemy import create_engine, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
+from app.core.git_remote import normalize_clone_url, resolve_branch
 from app.core.logging import get_logger
 from app.models.index_job import IndexJob
 from app.models.repository import Repository
@@ -568,7 +569,7 @@ def clone_and_index_repo(
     url: str | None,
     local_path: str | None,
     zip_minio_key: str | None = None,
-    branch: str,
+    branch: str | None,
     auth_token: str | None,
     is_private: bool,
 ) -> dict:
@@ -585,7 +586,8 @@ def clone_and_index_repo(
         job_id: UUID string of the IndexJob record.
         url: Remote HTTPS/SSH clone URL, or None for local imports.
         local_path: Absolute container path for local imports, or None.
-        branch: Git branch to check out.
+        branch: Git branch to check out, or None to auto-detect the remote's
+            default branch.
         auth_token: PAT for private HTTPS repos (not persisted).
         is_private: Whether the repository is private.
 
@@ -612,20 +614,26 @@ def clone_and_index_repo(
         # ── Stage 1: Clone ───────────────────────────────────────────────────
         if url:
             tmp_dir = tempfile.mkdtemp(prefix=f"codeatlas_{repo_id}_")
-            clone_url = url
+            clone_url = normalize_clone_url(url, auth_token)
 
-            # Convert SSH git URL (git@host:org/repo.git) → HTTPS
-            # This allows cloning without SSH keys inside the container.
-            ssh_match = re.match(r"git@([^:]+):(.+)", clone_url)
-            if ssh_match:
-                host, path = ssh_match.group(1), ssh_match.group(2)
-                clone_url = f"https://{host}/{path}"
-                logger.info("ssh_url_converted_to_https", original=url, converted=clone_url)
-
-            if auth_token and clone_url.startswith("https://"):
-                # Embed token in URL: https://token@host/...
-                proto, rest = clone_url.split("://", 1)
-                clone_url = f"{proto}://{auth_token}@{rest}"
+            # Resolve the branch against the remote. Repositories differ on
+            # whether the default is `main` or `master`, so never assume.
+            resolved_branch = resolve_branch(url, branch or None, auth_token)
+            if resolved_branch != branch:
+                logger.info(
+                    "branch_resolved",
+                    repo_id=repo_id,
+                    requested=branch,
+                    resolved=resolved_branch,
+                )
+                with get_sync_session() as session:
+                    session.execute(
+                        update(Repository)
+                        .where(Repository.id == uuid.UUID(repo_id))
+                        .values(default_branch=resolved_branch)
+                    )
+                    session.commit()
+            branch = resolved_branch
 
             logger.info("git_clone_started", url=url, branch=branch, dest=tmp_dir)
             git.Repo.clone_from(

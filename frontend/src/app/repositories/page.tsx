@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { Input } from "@/components/ui/input";
 import {
   AlertDialog,
@@ -198,8 +199,10 @@ export default function RepositoriesPage() {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={(e) => { e.preventDefault(); deleteTarget && deleteRepo(deleteTarget.id); }}
+              disabled={deleting}
               className="bg-destructive hover:bg-destructive/90 text-destructive-foreground"
             >
+              {deleting && <Spinner className="mr-2 text-destructive-foreground" />}
               {deleting ? "Deleting…" : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>

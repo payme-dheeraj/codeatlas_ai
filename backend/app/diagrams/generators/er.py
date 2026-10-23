@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -164,7 +165,6 @@ Output ONLY relationship lines, nothing else.
     system = "You are a database architect. Output only valid Mermaid erDiagram relationship lines."
 
     try:
-        from app.core.config import settings as s
         raw = call_llm(provider, model_name, system, prompt, max_tokens=600)
         lines = []
         for line in raw.splitlines():

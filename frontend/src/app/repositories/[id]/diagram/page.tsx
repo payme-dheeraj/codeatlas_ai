@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { GitBranch, RefreshCw, Download, Loader2 } from "lucide-react";
+import { GitBranch, RefreshCw, Download, AlertTriangle } from "lucide-react";
 import { diagramsApi } from "@/lib/api";
 import type { DiagramResponse } from "@/lib/api";
 import { Navbar } from "@/components/navbar";
@@ -10,7 +10,9 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 
 const DIAGRAM_TYPES = [
   { id: "architecture", label: "Architecture" },
@@ -25,6 +27,7 @@ export default function DiagramPage({ params }: { params: { id: string } }) {
   const [activeType, setActiveType] = useState("architecture");
   const [mermaidLoaded, setMermaidLoaded] = useState(false);
   const [polling, setPolling] = useState(false);
+  const [renderError, setRenderError] = useState<string | null>(null);
   const diagramRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
 
@@ -44,7 +47,7 @@ export default function DiagramPage({ params }: { params: { id: string } }) {
 
   const diagramExists = (diagrams as DiagramResponse[]).some((d) => d.diagram_type === activeType);
 
-  const { data: fullDiagram } = useQuery({
+  const { data: fullDiagram, isLoading: diagramLoading } = useQuery({
     queryKey: ["diagram-detail", repoId, activeType],
     queryFn: () => diagramsApi.get(repoId, activeType),
     enabled: diagramExists,
@@ -70,15 +73,38 @@ export default function DiagramPage({ params }: { params: { id: string } }) {
     },
   });
 
-  // Render mermaid when source changes
+  // Render mermaid when source changes.
+  // NOTE: `mermaid.run()` is deliberately avoided — it stamps the node with
+  // `data-processed` and silently skips it on later renders, which left the
+  // raw source text visible when switching diagram types.
   useEffect(() => {
-    if (!mermaidLoaded || !diagramRef.current || !current?.source_code) return;
     const el = diagramRef.current;
-    el.innerHTML = current.source_code;
-    import("mermaid").then((m) => {
-      m.default.run({ nodes: [el] }).catch(console.error);
-    });
-  }, [mermaidLoaded, current?.source_code]);
+    const source = current?.source_code?.trim();
+    if (!mermaidLoaded || !el || !source) return;
+
+    let cancelled = false;
+    setRenderError(null);
+    el.innerHTML = "";
+
+    import("mermaid")
+      .then(async (m) => {
+        const mermaid = m.default;
+        // Unique id per render so mermaid never reuses a stale DOM node.
+        const id = `mermaid-${activeType}-${Date.now()}`;
+        const { svg } = await mermaid.render(id, source);
+        if (cancelled || !diagramRef.current) return;
+        diagramRef.current.innerHTML = svg;
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        if (diagramRef.current) diagramRef.current.innerHTML = "";
+        setRenderError(err instanceof Error ? err.message : String(err));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mermaidLoaded, current?.source_code, activeType]);
 
   const handleDownload = () => {
     if (!current) return;
@@ -134,13 +160,38 @@ export default function DiagramPage({ params }: { params: { id: string } }) {
 
         {/* Diagram view */}
         <Card className="min-h-[400px] flex items-center justify-center overflow-auto p-6">
-          {isLoading || generating ? (
+          {isLoading || generating || polling || diagramLoading ? (
             <div className="w-full space-y-3">
               <Skeleton className="h-64 w-full" />
-              <p className="text-xs text-center text-muted-foreground">{generating ? "Generating diagram…" : "Loading…"}</p>
+              <p className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                <Spinner className="h-3 w-3" />
+                {generating || polling
+                  ? "Generating diagram — this can take a minute…"
+                  : "Loading…"}
+              </p>
             </div>
           ) : current ? (
-            <div ref={diagramRef} className="w-full text-center" />
+            <div className="w-full">
+              {renderError && (
+                <Alert variant="destructive" className="mb-4 text-left">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertDescription className="space-y-2">
+                    <p>This diagram could not be rendered — the generated source is not valid Mermaid.</p>
+                    <p className="font-mono text-xs opacity-80">{renderError}</p>
+                    <p className="text-xs">Try regenerating it, or inspect the source below.</p>
+                  </AlertDescription>
+                </Alert>
+              )}
+              {!mermaidLoaded && !renderError && (
+                <p className="flex items-center justify-center gap-2 text-xs text-muted-foreground py-8">
+                  <Spinner className="h-3 w-3" /> Preparing renderer…
+                </p>
+              )}
+              <div
+                ref={diagramRef}
+                className={cn("w-full text-center [&_svg]:mx-auto [&_svg]:h-auto [&_svg]:max-w-full", renderError && "hidden")}
+              />
+            </div>
           ) : (
             <div className="text-center text-muted-foreground space-y-3">
               <GitBranch className="h-10 w-10 mx-auto opacity-30" />

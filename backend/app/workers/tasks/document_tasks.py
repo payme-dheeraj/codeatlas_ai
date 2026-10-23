@@ -235,7 +235,7 @@ def _build_repo_context(session, repo_id: str, symbols: list[dict]) -> dict[str,
     # Data models (class symbols)
     model_syms = [s for s in symbols if s.get("symbol_kind") in ("class", "interface")][:20]
     data_models = "\n".join(
-        f"- `{s['qualified_name']}` ({s['language']}) — {s.get('docstring', '')[:80]}"
+        f"- `{s['qualified_name']}` ({s['language']}) — {(s.get('docstring') or '')[:80]}"
         for s in model_syms
     )
 

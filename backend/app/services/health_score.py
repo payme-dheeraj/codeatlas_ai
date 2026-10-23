@@ -136,7 +136,7 @@ class HealthScoreService:
             select(SecurityFinding.severity, func.count(SecurityFinding.id))
             .where(
                 SecurityFinding.scan_id == latest_scan,
-                SecurityFinding.is_suppressed.is_(False),
+                SecurityFinding.suppressed.is_(False),
             )
             .group_by(SecurityFinding.severity)
         )

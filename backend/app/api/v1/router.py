@@ -1,7 +1,8 @@
 """Top-level API v1 router — aggregates all endpoint sub-routers."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.api.deps import require_authenticated
 from app.api.v1.endpoints import (
     admin,
     auth,
@@ -20,16 +21,23 @@ from app.api.v1.endpoints import (
 
 api_router = APIRouter(prefix="/api/v1")
 
+# Public: login / register / refresh live here (per-route auth where needed).
 api_router.include_router(auth.router)
-api_router.include_router(chat.router)
-api_router.include_router(users.router)
-api_router.include_router(repositories.router)
-api_router.include_router(parser.router)
-api_router.include_router(search.router)
-api_router.include_router(security.router)
-api_router.include_router(documents.router)
-api_router.include_router(diagrams.router)
-api_router.include_router(admin.router)
-api_router.include_router(health_score.router)
-api_router.include_router(pr_review.router)
-api_router.include_router(webhooks.router)
+
+# Everything else sits behind the authentication gate (see AUTH_REQUIRED).
+_protected = [Depends(require_authenticated)]
+for _router in (
+    chat.router,
+    users.router,
+    repositories.router,
+    parser.router,
+    search.router,
+    security.router,
+    documents.router,
+    diagrams.router,
+    admin.router,
+    health_score.router,
+    pr_review.router,
+    webhooks.router,
+):
+    api_router.include_router(_router, dependencies=_protected)

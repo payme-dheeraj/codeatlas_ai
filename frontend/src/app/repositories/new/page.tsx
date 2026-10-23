@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
-import { GitBranch, ArrowLeft, Loader2, AlertCircle, Upload } from "lucide-react";
+import { GitBranch, ArrowLeft, Loader2, AlertCircle, Upload, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { reposApi } from "@/lib/api";
 import { Navbar } from "@/components/navbar";
@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 type ImportMode = "url" | "zip";
 
@@ -21,14 +22,37 @@ export default function NewRepositoryPage() {
   const [url, setUrl] = useState("");
   const [name, setName] = useState("");
   const [token, setToken] = useState("");
+  const [branch, setBranch] = useState("");
+  const [branchError, setBranchError] = useState("");
   const [zipFile, setZipFile] = useState<File | null>(null);
   const [error, setError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const { mutate: createFromUrl, isPending: urlPending } = useMutation({
-    mutationFn: () => reposApi.create(url.trim(), name.trim() || undefined, token.trim() || undefined),
+    mutationFn: () =>
+      reposApi.create(
+        url.trim(),
+        name.trim() || undefined,
+        token.trim() || undefined,
+        branch.trim() || undefined
+      ),
     onSuccess: (repo) => router.push(`/repositories/${repo.id}`),
     onError: (err: Error) => setError(err.message),
+  });
+
+  // Look up the remote's branches so the user can pick one before importing.
+  const {
+    mutate: loadBranches,
+    isPending: branchesPending,
+    data: branchInfo,
+    reset: resetBranches,
+  } = useMutation({
+    mutationFn: () => reposApi.remoteBranches(url.trim(), token.trim() || undefined),
+    onSuccess: (info) => {
+      setBranchError("");
+      setBranch((b) => b || info.default_branch);
+    },
+    onError: (err: Error) => setBranchError(err.message),
   });
 
   const { mutate: uploadZip, isPending: zipPending } = useMutation({
@@ -130,6 +154,72 @@ export default function NewRepositoryPage() {
                     <p className="text-xs text-muted-foreground">
                       GitHub / GitLab / Bitbucket personal access token.
                     </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="branch">
+                      Branch <span className="text-muted-foreground font-normal">(optional)</span>
+                    </Label>
+                    <div className="flex gap-2">
+                      {branchInfo?.branches?.length ? (
+                        <Select value={branch} onValueChange={setBranch}>
+                          <SelectTrigger id="branch" className="flex-1">
+                            <SelectValue placeholder="Select a branch" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {branchInfo.branches.map((b) => (
+                              <SelectItem key={b} value={b}>
+                                {b}
+                                {b === branchInfo.default_branch ? "  (default)" : ""}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          id="branch"
+                          value={branch}
+                          onChange={(e) => setBranch(e.target.value)}
+                          placeholder="Auto-detect (main / master)"
+                          className="flex-1"
+                        />
+                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setBranchError("");
+                          resetBranches();
+                          if (!url.trim()) {
+                            setBranchError("Enter the repository URL first.");
+                            return;
+                          }
+                          loadBranches();
+                        }}
+                        disabled={branchesPending}
+                        title="Fetch branches from the remote"
+                      >
+                        {branchesPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <RefreshCw className="h-4 w-4" />
+                        )}
+                        <span className="ml-2">Load</span>
+                      </Button>
+                    </div>
+                    {branchError ? (
+                      <p className="text-xs text-destructive">{branchError}</p>
+                    ) : branchInfo?.branches?.length ? (
+                      <p className="text-xs text-muted-foreground">
+                        {branchInfo.branches.length} branches found · default is{" "}
+                        <span className="font-mono">{branchInfo.default_branch}</span>
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Leave blank to use the repository&apos;s default branch, or click
+                        Load to pick from the available branches.
+                      </p>
+                    )}
                   </div>
                 </>
               ) : (

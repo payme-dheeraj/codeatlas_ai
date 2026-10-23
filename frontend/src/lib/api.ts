@@ -72,17 +72,32 @@ export interface Repository {
   latest_job: IndexJob | null;
 }
 
+/** AI-generated remediation payload (JSON object, not a string). */
+export interface Remediation {
+  vulnerability?: string;
+  fixed_code?: string;
+  recommendations?: string[];
+}
+
 export interface SecurityFinding {
   id: string;
   scan_id: string;
+  repo_id: string;
+  scanner: string;
+  rule_id: string;
   title: string;
+  description: string;
   severity: "critical" | "high" | "medium" | "low" | "info";
+  cvss_score: number;
   category: string;
+  language: string | null;
   file_path: string | null;
-  line_start: number | null;
+  start_line: number | null;
+  end_line: number | null;
   snippet: string | null;
-  remediation: string | null;
-  is_suppressed: boolean;
+  remediation: Remediation | null;
+  is_false_positive: boolean;
+  suppressed: boolean;
 }
 
 export interface SecurityScan {
@@ -187,9 +202,16 @@ async function apiFetch<T>(
   }
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
   if (!res.ok) {
+    if (res.status === 401 && auth && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("codeatlas:unauthorized"));
+    }
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail ?? `HTTP ${res.status}`);
+    const detail = Array.isArray(err.detail)
+      ? err.detail.map((d: { msg?: string }) => d.msg ?? JSON.stringify(d)).join("; ")
+      : err.detail;
+    throw new Error(detail ?? `HTTP ${res.status}`);
   }
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
@@ -234,11 +256,27 @@ export const reposApi = {
   async get(id: string): Promise<Repository> {
     return apiFetch<Repository>(`/repos/${id}`);
   },
-  async create(url: string, name?: string, auth_token?: string): Promise<Repository> {
+  async create(
+    url: string,
+    name?: string,
+    auth_token?: string,
+    default_branch?: string
+  ): Promise<Repository> {
     return apiFetch<Repository>("/repos", {
       method: "POST",
-      body: JSON.stringify({ url, name, auth_token }),
+      // `default_branch` omitted => backend auto-detects main vs master.
+      body: JSON.stringify({ url, name, auth_token, default_branch }),
     });
+  },
+  async remoteBranches(
+    url: string,
+    auth_token?: string
+  ): Promise<{ branches: string[]; default_branch: string }> {
+    const params = new URLSearchParams({ url });
+    if (auth_token) params.set("auth_token", auth_token);
+    return apiFetch<{ branches: string[]; default_branch: string }>(
+      `/repos/remote-branches?${params.toString()}`
+    );
   },
   async uploadZip(file: File, name?: string): Promise<Repository> {
     const token = getToken();
@@ -379,7 +417,9 @@ export interface SearchResult {
 
 export const searchApi = {
   async search(query: string, repoId?: string): Promise<SearchResult[]> {
-    const body: Record<string, unknown> = { query, mode: "keyword" };
+    // Hybrid fuses semantic + keyword, which is the sensible default for a
+    // natural-language search box (keyword alone misses paraphrased queries).
+    const body: Record<string, unknown> = { query, mode: "hybrid" };
     if (repoId) body.repo_ids = [repoId];
     const res = await apiFetch<any>(
       "/search",
